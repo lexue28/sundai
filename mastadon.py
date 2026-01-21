@@ -19,12 +19,30 @@ class MastodonClient:
             'Authorization': f'Bearer {self.access_token}'
         }
     
-    def post_status(self, status, visibility='public', in_reply_to_id=None):
+    def upload_media(self, file_path, description=None):
+        """
+        POST /api/v1/media
+        Uploads a media file to Mastodon and returns the media_id.
+        """
+        url = f'{self.base_url}/media'
+        
+        with open(file_path, 'rb') as file:
+            files = {'file': file}
+            data = {}
+            if description:
+                data['description'] = description
+            
+            response = requests.post(url, headers=self.headers, files=files, data=data)
+            response.raise_for_status()
+            media_data = response.json()
+            return media_data.get('id')
+    
+    def post_status(self, status, visibility='public', in_reply_to_id=None, media_ids=None):
         """
         POST /api/v1/statuses
         Posts a status to Mastodon.
         If in_reply_to_id is provided, this becomes a reply to that post.
-        Note: This is separate from searching - use get_recent_posts_by_keyword to search.
+        If media_ids is provided (list of media IDs), attaches media to the post.
         """
         url = f'{self.base_url}/statuses'
         data = {
@@ -38,7 +56,22 @@ class MastodonClient:
         else:
             print(f"Posting new status: {status[:100]}...")
         
-        response = requests.post(url, headers=self.headers, data=data)
+        # Handle media_ids - Mastodon API expects media_ids[] as array
+        # requests library handles lists in data by repeating the key
+        files = None
+        if media_ids:
+            # Convert media_ids to list of strings
+            media_ids_list = [str(mid) for mid in media_ids]
+            # Use a list of tuples for proper array handling
+            post_data = []
+            for key, value in data.items():
+                post_data.append((key, value))
+            for media_id in media_ids_list:
+                post_data.append(('media_ids[]', media_id))
+            print(f"Attaching {len(media_ids)} media file(s)")
+            response = requests.post(url, headers=self.headers, data=post_data, files=files)
+        else:
+            response = requests.post(url, headers=self.headers, data=data, files=files)
         response.raise_for_status()
         return response.json()
     
