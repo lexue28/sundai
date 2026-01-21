@@ -64,47 +64,47 @@ def main():
     except Exception as e:
         print(f"Error posting promotional content: {e}\n")
     
-    # # Generate and post replies to keyword searches
-    # try:
-    #     mastodon_client = MastodonClient()
-    #     recent_posts = mastodon_client.get_recent_posts_by_keyword(business_keyword, limit=5)
-    #     
-    #     if not recent_posts:
-    #         print(f"No posts found for keyword: {business_keyword}")
-    #         return
-    #     
-    #     llm_client = LLMClient()
-    #     reply_batch = llm_client.generate_replies(
-    #         posts=recent_posts,
-    #         notion_context=notion_context,
-    #         tone='professional',
-    #         max_length=500
-    #     )
-    #     
-    #     print(f"\n{'='*60}")
-    #     print("OPENROUTER GENERATED REPLIES:")
-    #     print('='*60)
-    #     for i, reply in enumerate(reply_batch.replies, 1):
-    #         print(f"\nReply {i}:")
-    #         print(f"  Post ID to reply to: {reply.post_id}")
-    #         print(f"  Reply text: {reply.status}")
-    #         print(f"  Visibility: {reply.visibility}")
-    #         print(f"  Length: {len(reply.status)} characters")
-    #     print('='*60 + "\n")
-    #     
-    #     for reply in reply_batch.replies:
-    #         try:
-    #             result = mastodon_client.post_status(
-    #                 status=reply.status,
-    #                 visibility=reply.visibility,
-    #                 in_reply_to_id=reply.post_id
-    #             )
-    #             print(f"Posted reply to {reply.post_id}: {result.get('url')}")
-    #         except Exception as e:
-    #             print(f"Error posting reply to {reply.post_id}: {e}")
-    # 
-    # except Exception as e:
-    #     print(f"Error: {e}")
+    # Generate and post replies to keyword searches
+    try:
+        mastodon_client = MastodonClient()
+        recent_posts = mastodon_client.get_recent_posts_by_keyword(business_keyword, limit=5)
+        
+        if not recent_posts:
+            print(f"No posts found for keyword: {business_keyword}")
+            return
+        
+        llm_client = LLMClient()
+        reply_batch = llm_client.generate_replies(
+            posts=recent_posts,
+            notion_context=notion_context,
+            tone='professional',
+            max_length=500
+        )
+        
+        print(f"\n{'='*60}")
+        print("OPENROUTER GENERATED REPLIES:")
+        print('='*60)
+        for i, reply in enumerate(reply_batch.replies, 1):
+            print(f"\nReply {i}:")
+            print(f"  Post ID to reply to: {reply.post_id}")
+            print(f"  Reply text: {reply.status}")
+            print(f"  Visibility: {reply.visibility}")
+            print(f"  Length: {len(reply.status)} characters")
+        print('='*60 + "\n")
+        
+        for reply in reply_batch.replies:
+            try:
+                result = mastodon_client.post_status(
+                    status=reply.status,
+                    visibility=reply.visibility,
+                    in_reply_to_id=reply.post_id
+                )
+                print(f"Posted reply to {reply.post_id}: {result.get('url')}")
+            except Exception as e:
+                print(f"Error posting reply to {reply.post_id}: {e}")
+
+    except Exception as e:
+        print(f"Error: {e}")
 
 
 if __name__ == "__main__":
