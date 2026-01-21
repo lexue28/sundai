@@ -50,17 +50,36 @@ Generate the social media post:"""
         
         return response.choices[0].message.content.strip()
     
-    def generate_promotional_post(self, notion_context=None, max_length=500):
+    def generate_promotional_post(self, notion_context=None, feedback_list=None, max_length=500):
         """
         Generate a promotional post advertising fullstack abilities and availability for freelance work.
+        
+        Args:
+            notion_context: Context from Notion page
+            feedback_list: List of PostFeedback objects with past rejection reasons
+            max_length: Maximum character length for the post
         """
         print(f"\n[DEBUG] Starting promotional post generation...")
         print(f"[DEBUG] Model: {self.model}")
         print(f"[DEBUG] Notion context length: {len(notion_context) if notion_context else 0}")
+        print(f"[DEBUG] Feedback items: {len(feedback_list) if feedback_list else 0}")
         
         context_snippet = ""
         if notion_context:
             context_snippet = f"\nContext about my work and projects:\n{notion_context[:800]}\n"
+        
+        feedback_snippet = ""
+        if feedback_list and len(feedback_list) > 0:
+            # Summarize recent feedback to help avoid past mistakes
+            recent_feedback = feedback_list[-5:]  # Get last 5 feedback items
+            feedback_reasons = [f.rejection_reason for f in recent_feedback]
+            unique_reasons = list(set(feedback_reasons))
+            
+            feedback_snippet = f"\n\nIMPORTANT - Learn from past rejections:\n"
+            feedback_snippet += "The following posts were previously rejected. Avoid these issues:\n"
+            for i, reason in enumerate(unique_reasons, 1):
+                feedback_snippet += f"- {reason}\n"
+            feedback_snippet += "\nMake sure your post addresses these concerns and avoids the mistakes mentioned above.\n"
         
         prompt = f"""You are creating a Mastodon post to advertise a freelance fullstack developer. Write a compelling post that:
 
@@ -71,7 +90,7 @@ Generate the social media post:"""
 - Includes hashtags like #FreelanceDeveloper #FullStackDeveloper #HireMe #WebDev
 - Stays under {max_length} characters total
 - Is specific about technical capabilities
-{context_snippet}
+{context_snippet}{feedback_snippet}
 Write ONLY the post content itself - no explanations or meta commentary. Make it engaging and memorable."""
 
         print(f"[DEBUG] Sending request to OpenRouter...")
@@ -160,6 +179,7 @@ Requirements for each reply:
 - Relevant to the original post
 - Tone: {tone}
 - Be helpful and add value
+- Not the same as original post
 
 Generate replies for all {len(posts)} posts. Each reply must have:
 - post_id: The exact post ID to reply to (must be a numeric string)

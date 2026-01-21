@@ -1,9 +1,12 @@
 import os
+import asyncio
 import replicate
 from dotenv import load_dotenv
 from notion import NotionClient
 from mastadon import MastodonClient
 from llm_client import LLMClient
+from telegram_client import TelegramClient
+from feedback_storage import FeedbackStorage
 
 load_dotenv()
 
@@ -13,7 +16,7 @@ if not replicate_api_token:
     raise ValueError("REPLICATE_API_TOKEN not found in environment variables. Please add it to your .env file.")
 
 
-def main():
+async def main():
     notion_page_url = "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"
     business_keyword = os.getenv('BUSINESS_KEYWORD', 'workshop')
     
@@ -38,8 +41,15 @@ def main():
         print("GENERATING PROMOTIONAL POST:")
         print('='*60)
         
+        # Load past feedback to improve future posts
+        feedback_storage = FeedbackStorage()
+        past_feedback = feedback_storage.get_all_feedback()
+        if past_feedback:
+            print(f"📚 Loaded {len(past_feedback)} past feedback items to improve post generation")
+        
         promotional_post = llm_client.generate_promotional_post(
             notion_context=notion_context,
+            feedback_list=past_feedback,
             max_length=500
         )
         
@@ -50,6 +60,30 @@ def main():
         if not promotional_post or len(promotional_post.strip()) == 0:
             print("[ERROR] Cannot post empty content! Skipping post.")
             return
+        
+        # Send for human approval via Telegram
+        print(f"\n{'='*60}")
+        print("SENDING FOR HUMAN APPROVAL:")
+        print('='*60)
+        telegram_client = TelegramClient()
+        
+        decision, rejection_reason = await telegram_client.wait_for_approval_with_feedback(promotional_post)
+        
+        if decision == "reject":
+            # Store feedback if rejected
+            if rejection_reason:
+                feedback_storage.store_feedback(promotional_post, rejection_reason)
+            else:
+                feedback_storage.store_feedback(promotional_post, "No reason provided")
+            print("❌ Post rejected. Feedback stored.")
+            return
+        
+        if decision != "approve":
+            print(f"[ERROR] Unexpected decision: {decision}. Skipping post.")
+            return
+        
+        # Post was approved, proceed with publishing
+        print("✅ Post approved. Proceeding with publishing...")
         
         # Generate image with Replicate
         print("Generating image with Replicate...")
@@ -106,8 +140,11 @@ freelance software engineer, computer science themed""",
         
     except Exception as e:
         print(f"Error posting promotional content: {e}\n")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
     
     # Generate and post replies to keyword searches
+    # COMMENTED OUT - Replying functionality disabled
     # try:
     #     mastodon_client = MastodonClient()
     #     recent_posts = mastodon_client.get_recent_posts_by_keyword(business_keyword, limit=5)
@@ -146,9 +183,6 @@ freelance software engineer, computer science themed""",
     #         except Exception as e:
     #             print(f"Error posting reply to {reply.post_id}: {e}")
 
-    except Exception as e:
-        print(f"Error: {e}")
-
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

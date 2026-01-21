@@ -66,3 +66,10 @@ class ReplyBatch(BaseModel):
         if len(post_ids) != len(set(post_ids)):
             raise ValueError("Each post_id should only have one reply")
         return self
+
+
+class PostFeedback(BaseModel):
+    """Model for storing feedback on rejected posts."""
+    post_content: str = Field(description="The post content that was rejected")
+    rejection_reason: str = Field(description="The reason for rejection")
+    timestamp: str = Field(description="ISO format timestamp of when feedback was recorded")
