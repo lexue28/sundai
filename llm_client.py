@@ -61,96 +61,99 @@ Generate the social media post:"""
         """
         print(f"\n[DEBUG] Starting promotional post generation...")
         print(f"[DEBUG] Model: {self.model}")
+        print(f"[DEBUG] Model from env: {os.getenv('OPENROUTER_MODEL', 'NOT SET - using default')}")
         print(f"[DEBUG] Notion context length: {len(notion_context) if notion_context else 0}")
         print(f"[DEBUG] Feedback items: {len(feedback_list) if feedback_list else 0}")
         
         context_snippet = ""
         if notion_context:
-            context_snippet = f"\nContext about my work and projects:\n{notion_context[:800]}\n"
+            # Ultra-short context - just first 100 chars
+            context_snippet = f"\n{notion_context[:100]}\n"
         
         feedback_snippet = ""
         if feedback_list and len(feedback_list) > 0:
-            # Summarize recent feedback to help avoid past mistakes
-            recent_feedback = feedback_list[-5:]  # Get last 5 feedback items
-            feedback_reasons = [f.rejection_reason for f in recent_feedback]
-            unique_reasons = list(set(feedback_reasons))
-            
-            feedback_snippet = f"\n\nIMPORTANT - Learn from past rejections:\n"
-            feedback_snippet += "The following posts were previously rejected. Avoid these issues:\n"
-            for i, reason in enumerate(unique_reasons, 1):
-                feedback_snippet += f"- {reason}\n"
-            feedback_snippet += "\nMake sure your post addresses these concerns and avoids the mistakes mentioned above.\n"
+            # Get the most recent feedback and pass it directly to the model
+            latest_reason = feedback_list[-1].rejection_reason.strip()
+            feedback_snippet = f"\nFollow this feedback: {latest_reason}\n"
         
-        prompt = f"""You are creating a Mastodon post to advertise a freelance fullstack developer. Write a compelling post that:
+        # Add variation to prompt to prevent cached responses
+        import random
+        variation_hints = [
+            "Creative",
+            "Fresh",
+            "Unique",
+            "Personal"
+        ]
+        variation = random.choice(variation_hints)
+        
+        # Build prompt with feedback prominently featured
+        base_prompt = f"""Write a Mastodon post for a freelance fullstack developer.
 
-- Highlights fullstack development skills (React, Node.js, Python, databases, APIs, etc.)
-- Mentions availability for freelance work
-- Sounds confident and professional, not desperate
-- Makes people want to hire them
-- Includes hashtags like #FreelanceDeveloper #FullStackDeveloper #HireMe #WebDev
-- Stays under {max_length} characters total
-- Is specific about technical capabilities
-{context_snippet}{feedback_snippet}
-Write ONLY the post content itself - no explanations or meta commentary. Make it engaging and memorable."""
+Skills: React, Node.js, Python, databases, APIs
+Available for freelance work
+Under {max_length} chars
+Hashtags: #FreelanceDeveloper #FullStackDeveloper #HireMe
+{variation}
+{context_snippet}"""
+        
+        # Add feedback prominently at the end so it's fresh in the model's context
+        if feedback_snippet:
+            prompt = f"""{base_prompt}
+
+{feedback_snippet}
+Return ONLY the post text."""
+        else:
+            prompt = f"""{base_prompt}
+
+Return ONLY the post text."""
 
         print(f"[DEBUG] Sending request to OpenRouter...")
         print(f"[DEBUG] Prompt length: {len(prompt)} characters")
         
         try:
-            response = self.client.chat.completions.create(
+            # Use OpenRouter responses.create format (exactly as user's example)
+            system_prompt = "You write social media posts. Return only the post text."
+            
+            response = self.client.responses.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a skilled copywriter who writes engaging, authentic social media posts. You create compelling content that helps developers get hired. Always return the post text directly without any explanation or commentary."},
+                input=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=400,
-                temperature=0.8
             )
             
-            print(f"[DEBUG] OpenRouter response received")
-            print(f"[DEBUG] Response object type: {type(response)}")
-            print(f"[DEBUG] Response choices count: {len(response.choices) if response.choices else 0}")
+            print(f"[DEBUG] Response type: {type(response)}")
+            post_content = response.output_text.strip() if response.output_text else None
             
-            if not response.choices:
-                print("[ERROR] No choices in response!")
-                return "Freelance fullstack developer available for hire! 🚀 React, Node.js, Python, APIs. Building scalable web apps. Let's create something amazing! #FreelanceDeveloper #FullStackDeveloper #HireMe"
+            print(f"[DEBUG] Response content: {repr(post_content[:200]) if post_content else 'None'}")
             
-            message = response.choices[0].message
-            print(f"[DEBUG] Message type: {type(message)}")
-            print(f"[DEBUG] Message content type: {type(message.content)}")
-            print(f"[DEBUG] Message content (raw): {repr(message.content)}")
-            print(f"[DEBUG] Message content length: {len(message.content) if message.content else 0}")
-            
-            if not message.content:
-                print("[ERROR] Message content is None or empty!")
-                print(f"[DEBUG] Full response structure: {response}")
-                return "Freelance fullstack developer available for hire! 🚀 React, Node.js, Python, APIs. Building scalable web apps. Let's create something amazing! #FreelanceDeveloper #FullStackDeveloper #HireMe"
-            
-            post_content = message.content.strip()
-            print(f"[DEBUG] After strip, content length: {len(post_content)}")
-            print(f"[DEBUG] After strip, content: {repr(post_content)}")
-            
+            if not post_content or len(post_content) == 0:
+                raise ValueError("Post content is empty after processing.")
             # Remove any markdown formatting if present
             if post_content.startswith('"') and post_content.endswith('"'):
                 post_content = post_content[1:-1]
-                print(f"[DEBUG] Removed outer quotes")
             if post_content.startswith("'") and post_content.endswith("'"):
                 post_content = post_content[1:-1]
-                print(f"[DEBUG] Removed outer single quotes")
-            
-            if not post_content or len(post_content) == 0:
-                print("[ERROR] Post content is empty after processing!")
-                print(f"[DEBUG] Returning fallback post")
-                return "Freelance fullstack developer available for hire! 🚀 React, Node.js, Python, APIs. Building scalable web apps. Let's create something amazing! #FreelanceDeveloper #FullStackDeveloper #HireMe"
             
             print(f"[DEBUG] Final post content length: {len(post_content)}")
+            print(f"[DEBUG] Final post content: {post_content[:100]}...")
             return post_content
             
         except Exception as e:
+            print(f"\n{'='*60}")
             print(f"[ERROR] Exception in generate_promotional_post: {type(e).__name__}: {e}")
+            print(f"{'='*60}")
             import traceback
-            print(f"[ERROR] Traceback: {traceback.format_exc()}")
-            return "Freelance fullstack developer available for hire! 🚀 React, Node.js, Python, APIs. Building scalable web apps. Let's create something amazing! #FreelanceDeveloper #FullStackDeveloper #HireMe"
+            print(f"[ERROR] Full traceback:")
+            print(traceback.format_exc())
+            print(f"{'='*60}\n")
+            
+            # Don't silently return fallback - raise the error so user knows something is wrong
+            raise RuntimeError(
+                f"Failed to generate post: {e}\n"
+                f"Check your API key (OPEN_API_KEY or OPENROUTER_API_KEY) and model ({self.model}).\n"
+                f"Make sure the model is available and you have sufficient credits."
+            ) from e
     
     def generate_replies(self, posts, notion_context=None, tone='professional', max_length=500):
         """

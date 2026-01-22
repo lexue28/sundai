@@ -209,5 +209,8 @@ __marimo__/
 # Generated images
 *.webp
 
+# docs
+*.md
+
 # Feedback storage
 feedback.json
