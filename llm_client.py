@@ -50,115 +50,275 @@ Generate the social media post:"""
         
         return response.choices[0].message.content.strip()
     
-    def generate_promotional_post(self, notion_context=None, feedback_list=None, max_length=500):
+    def generate_post_with_rag(self, topic: str, context: str, max_length: int = 500, feedback: str = None) -> str:
         """
-        Generate a promotional post advertising fullstack abilities and availability for freelance work.
+        Generate a post using RAG context and a specific topic.
+        Base prompt is about Linda the freelance coder, with SF tech bro topic as an angle.
         
         Args:
-            notion_context: Context from Notion page
-            feedback_list: List of PostFeedback objects with past rejection reasons
+            topic: The SF tech bro topic to incorporate as an angle (e.g., "AI-powered everything")
+            context: Context retrieved from RAG database (about Linda's projects/skills)
             max_length: Maximum character length for the post
+            feedback: Optional feedback to incorporate into the prompt
+            
+        Returns:
+            Generated post text
         """
-        print(f"\n[DEBUG] Starting promotional post generation...")
-        print(f"[DEBUG] Model: {self.model}")
-        print(f"[DEBUG] Model from env: {os.getenv('OPENROUTER_MODEL', 'NOT SET - using default')}")
-        print(f"[DEBUG] Notion context length: {len(notion_context) if notion_context else 0}")
-        print(f"[DEBUG] Feedback items: {len(feedback_list) if feedback_list else 0}")
-        
-        context_snippet = ""
-        if notion_context:
-            # Ultra-short context - just first 100 chars
-            context_snippet = f"\n{notion_context[:100]}\n"
-        
-        feedback_snippet = ""
-        if feedback_list and len(feedback_list) > 0:
-            # Get the most recent feedback and pass it directly to the model
-            latest_reason = feedback_list[-1].rejection_reason.strip()
-            feedback_snippet = f"\nFollow this feedback: {latest_reason}\n"
-        
-        # Add variation to prompt to prevent cached responses
-        import random
-        variation_hints = [
-            "Creative",
-            "Fresh",
-            "Unique",
-            "Personal"
-        ]
-        variation = random.choice(variation_hints)
-        
-        # Build prompt with feedback prominently featured
-        base_prompt = f"""Write a Mastodon post for a freelance fullstack developer.
+        # Base prompt about Linda the freelance coder
+        base_prompt = f"""Write a Mastodon post for Linda, a freelance fullstack developer.
 
-Skills: React, Node.js, Python, databases, APIs
-Available for freelance work
-Under {max_length} chars
-Hashtags: #FreelanceDeveloper #FullStackDeveloper #HireMe
-{variation}
-{context_snippet}"""
+About Linda:
+- Freelance coder and fullstack developer
+- Skills: React, Node.js, Python, databases, APIs
+- Available for freelance work
+- Has past projects and coding experience
+
+Relevant context from past work/projects:
+{context}
+
+SF Tech Bro Topic Angle: {topic}
+(Incorporate this topic as a theme/angle, but keep the focus on Linda's coding work and projects)
+
+Requirements:
+- Primary focus: Linda's coding skills, projects, or freelance availability
+- Incorporate the SF tech bro topic ({topic}) as a subtle angle or theme
+- Engaging and authentic
+- Under {max_length} characters
+- Include relevant hashtags like #FreelanceDeveloper #FullStackDeveloper #HireMe
+- Professional but personal tone"""
         
-        # Add feedback prominently at the end so it's fresh in the model's context
-        if feedback_snippet:
+        # Add feedback if provided
+        if feedback:
             prompt = f"""{base_prompt}
 
-{feedback_snippet}
-Return ONLY the post text."""
+Important feedback to follow:
+{feedback}
+
+Output ONLY the post text."""
         else:
             prompt = f"""{base_prompt}
 
-Return ONLY the post text."""
-
-        print(f"[DEBUG] Sending request to OpenRouter...")
-        print(f"[DEBUG] Prompt length: {len(prompt)} characters")
+Output ONLY the post text."""
         
         try:
-            # Use OpenRouter responses.create format (exactly as user's example)
-            system_prompt = "You write social media posts. Return only the post text."
+            print(f"[DEBUG] Calling OpenRouter API with model: {self.model}")
+            print(f"[DEBUG] Prompt length: {len(prompt)} characters")
             
-            response = self.client.responses.create(
+            # For thinking models, we need more tokens (reasoning + output)
+            # Increase max_tokens to account for reasoning tokens
+            max_output_tokens = 300
+            # Thinking models use reasoning tokens first, so increase total
+            max_total_tokens = max_output_tokens + 400  # Extra for reasoning
+            
+            response = self.client.chat.completions.create(
                 model=self.model,
-                input=[
-                    {"role": "system", "content": system_prompt},
+                messages=[
+                    {"role": "system", "content": "You write social media posts. Return only the post text."},
                     {"role": "user", "content": prompt}
                 ],
+                max_tokens=max_total_tokens,  # Increased for thinking models
+                temperature=0.7
             )
             
-            print(f"[DEBUG] Response type: {type(response)}")
-            post_content = response.output_text.strip() if response.output_text else None
+            print(f"[DEBUG] Response received: {type(response)}")
+            print(f"[DEBUG] Response choices count: {len(response.choices) if response.choices else 0}")
             
-            print(f"[DEBUG] Response content: {repr(post_content[:200]) if post_content else 'None'}")
+            if not response.choices or len(response.choices) == 0:
+                raise ValueError("No choices in API response")
             
-            if not post_content or len(post_content) == 0:
-                raise ValueError("Post content is empty after processing.")
+            message = response.choices[0].message
+            print(f"[DEBUG] Message content type: {type(message.content)}")
+            print(f"[DEBUG] Message content (raw): {repr(message.content)}")
+            print(f"[DEBUG] Finish reason: {response.choices[0].finish_reason}")
+            
+            # Extract content - handle thinking models that put output in reasoning field
+            post_content = None
+            
+            # Method 1: Standard content field (works for non-thinking models)
+            if message.content and len(message.content.strip()) > 0:
+                post_content = str(message.content).strip()
+                print(f"[DEBUG] Got content from message.content: {len(post_content)} chars")
+            
+            # Method 2: For thinking models, extract from reasoning field
+            # Thinking models put reasoning in reasoning field, and actual output might be there too
+            if not post_content:
+                reasoning_text = None
+                
+                # Try to get reasoning from message object
+                if hasattr(message, 'reasoning') and message.reasoning:
+                    reasoning_text = str(message.reasoning)
+                    print(f"[DEBUG] Found reasoning field on message object")
+                elif hasattr(message, 'model_dump'):
+                    msg_dict = message.model_dump()
+                    reasoning_text = msg_dict.get('reasoning', '')
+                    if reasoning_text:
+                        reasoning_text = str(reasoning_text)
+                        print(f"[DEBUG] Found reasoning in model_dump")
+                
+                if reasoning_text and len(reasoning_text) > 100:
+                    print(f"[DEBUG] Extracting post from reasoning text ({len(reasoning_text)} chars)...")
+                    import re
+                    
+                    # Pattern 1: Look for text after "Draft:" in quotes
+                    match = re.search(r'Draft:\s*\n\s*["\']([^"\']+)["\']', reasoning_text, re.DOTALL)
+                    if match:
+                        post_content = match.group(1).strip()
+                        print(f"[DEBUG] Extracted from 'Draft:' pattern: {len(post_content)} chars")
+                    
+                    # Pattern 2: Look for the actual post pattern (has hashtags)
+                    if not post_content:
+                        match = re.search(r'([^"\']*Building[^"\']*#FreelanceDeveloper[^"\']*)', reasoning_text)
+                        if match:
+                            post_content = match.group(1).strip()
+                            # Clean up if it has extra quotes
+                            if post_content.startswith('"') and post_content.endswith('"'):
+                                post_content = post_content[1:-1]
+                            print(f"[DEBUG] Extracted from post pattern: {len(post_content)} chars")
+                    
+                    # Pattern 3: Find longest quoted string (likely the post)
+                    if not post_content:
+                        quoted_matches = re.findall(r'["\']([^"\']{100,})["\']', reasoning_text)
+                        if quoted_matches:
+                            # Take the longest one that contains hashtags or looks like a post
+                            for match in sorted(quoted_matches, key=len, reverse=True):
+                                if '#' in match or len(match) > 150:
+                                    post_content = match.strip()
+                                    print(f"[DEBUG] Extracted longest quoted text: {len(post_content)} chars")
+                                    break
+            
+            # Method 3: Try accessing as dict (for Pydantic models) - check reasoning there too
+            if not post_content:
+                try:
+                    if hasattr(message, 'model_dump'):
+                        msg_dict = message.model_dump()
+                        # Check content first
+                        post_content = msg_dict.get('content', '').strip() if msg_dict.get('content') else None
+                        # Then check reasoning
+                        if not post_content and msg_dict.get('reasoning'):
+                            reasoning = str(msg_dict.get('reasoning', ''))
+                            import re
+                            # Extract from reasoning
+                            match = re.search(r'["\']([^"\']{100,})["\']', reasoning)
+                            if match:
+                                post_content = match.group(1).strip()
+                    elif hasattr(message, 'dict'):
+                        msg_dict = message.dict()
+                        post_content = msg_dict.get('content', '').strip() if msg_dict.get('content') else None
+                    if post_content:
+                        print(f"[DEBUG] Extracted from message dict: {len(post_content)} chars")
+                except Exception as e:
+                    print(f"[DEBUG] Dict extraction failed: {e}")
+            
+            if not post_content:
+                print(f"[ERROR] Could not extract content from response")
+                print(f"[DEBUG] Message has reasoning attr: {hasattr(message, 'reasoning')}")
+                if hasattr(message, 'reasoning'):
+                    reasoning_preview = str(message.reasoning)[:1000] if message.reasoning else "None"
+                    print(f"[DEBUG] Reasoning preview: {reasoning_preview}...")
+                print(f"[DEBUG] Response string (first 2000 chars): {str(response)[:2000]}...")
+                raise ValueError("API returned empty content - could not extract from content or reasoning fields")
+            
             # Remove any markdown formatting if present
             if post_content.startswith('"') and post_content.endswith('"'):
                 post_content = post_content[1:-1]
             if post_content.startswith("'") and post_content.endswith("'"):
                 post_content = post_content[1:-1]
             
-            print(f"[DEBUG] Final post content length: {len(post_content)}")
-            print(f"[DEBUG] Final post content: {post_content[:100]}...")
+            print(f"[DEBUG] Post content after processing: {len(post_content)} chars")
             return post_content
             
         except Exception as e:
-            print(f"\n{'='*60}")
-            print(f"[ERROR] Exception in generate_promotional_post: {type(e).__name__}: {e}")
-            print(f"{'='*60}")
+            print(f"[ERROR] Exception in generate_post_with_rag: {type(e).__name__}: {e}")
             import traceback
-            print(f"[ERROR] Full traceback:")
             print(traceback.format_exc())
-            print(f"{'='*60}\n")
-            
-            # Don't silently return fallback - raise the error so user knows something is wrong
-            raise RuntimeError(
-                f"Failed to generate post: {e}\n"
-                f"Check your API key (OPEN_API_KEY or OPENROUTER_API_KEY) and model ({self.model}).\n"
-                f"Make sure the model is available and you have sufficient credits."
-            ) from e
+            raise RuntimeError(f"Failed to generate post: {e}") from e
     
-    def generate_replies(self, posts, notion_context=None, tone='professional', max_length=500):
+    def generate_promotional_post(self, notion_context=None, feedback_list=None, max_length=500, use_rag=True, rag_query=None, topic=None):
+        """
+        Generate a promotional post using RAG and topic cycling.
+        Now uses generate_post_with_rag internally.
+        
+        Args:
+            notion_context: Optional context from Notion page (if not using RAG) - deprecated, use RAG instead
+            feedback_list: List of PostFeedback objects with past rejection reasons
+            max_length: Maximum character length for the post
+            use_rag: If True, use RAG to retrieve context from database (default: True)
+            rag_query: Query string for RAG retrieval (default: based on topic)
+            topic: Specific topic to use (default: cycles through SF tech bro topics)
+        """
+        print(f"\n[DEBUG] Starting promotional post generation with RAG...")
+        print(f"[DEBUG] Model: {self.model}")
+        print(f"[DEBUG] Using RAG: {use_rag}")
+        print(f"[DEBUG] Feedback items: {len(feedback_list) if feedback_list else 0}")
+        
+        # Get topic (cycle through SF tech bro topics if not provided)
+        if not topic:
+            from topic_cycler import get_topic_cycler
+            topic_cycler = get_topic_cycler()
+            topic = topic_cycler.get_next_topic()
+            print(f"[DEBUG] Using topic from cycler: '{topic}'")
+        else:
+            print(f"[DEBUG] Using provided topic: '{topic}'")
+        
+        # Get context from RAG (about Linda's projects/skills)
+        context = ""
+        if use_rag:
+            try:
+                from RAG import retrieve_context, db
+                # Query for coding/projects context (not the SF tech bro topic)
+                query = rag_query or "freelance developer coding projects skills React Node.js Python"
+                print(f"[DEBUG] Retrieving context from RAG with query: '{query}'")
+                rag_context, _ = retrieve_context(db, query, top_k=5)
+                if rag_context and rag_context != "No relevant context found.":
+                    context = rag_context
+                    print(f"[DEBUG] Retrieved {len(rag_context)} characters from RAG")
+                else:
+                    print(f"[DEBUG] No context found in RAG")
+                    # Fallback to notion_context if provided
+                    if notion_context:
+                        context = notion_context[:500]
+            except Exception as e:
+                print(f"[DEBUG] Error using RAG: {e}")
+                if notion_context:
+                    context = notion_context[:500]
+        elif notion_context:
+            context = notion_context[:500]
+        
+        if not context:
+            print("[WARNING] No context available for post generation")
+            context = "Freelance fullstack developer with experience in React, Node.js, Python, databases, and APIs. Available for freelance work."
+        
+        # Get feedback to include in prompt
+        feedback = None
+        if feedback_list and len(feedback_list) > 0:
+            latest_reason = feedback_list[-1].rejection_reason.strip()
+            feedback = latest_reason
+            print(f"[DEBUG] Including feedback in prompt: {latest_reason}")
+        
+        # Generate post using RAG (with feedback in prompt)
+        post_content = self.generate_post_with_rag(
+            topic=topic, 
+            context=context, 
+            max_length=max_length,
+            feedback=feedback
+        )
+        
+        print(f"[DEBUG] Final post content length: {len(post_content)}")
+        print(f"[DEBUG] Final post content: {post_content[:100]}...")
+        return post_content
+    
+    def generate_replies(self, posts, notion_context=None, tone='professional', max_length=500, use_rag=True, rag_query=None):
         """
         Generate replies to multiple Mastodon posts using structured outputs.
         Uses structured outputs similar to the example with retry logic.
+        
+        Args:
+            posts: List of MastodonPost objects to reply to
+            notion_context: Optional context from Notion page (if not using RAG)
+            tone: Tone for the replies
+            max_length: Maximum character length for replies
+            use_rag: If True, use RAG to retrieve context from database (default: True)
+            rag_query: Query string for RAG retrieval (default: based on post content)
         """
         posts_text = []
         for post in posts:
@@ -169,9 +329,26 @@ Return ONLY the post text."""
         
         posts_context = "\n\n".join(posts_text)
         
+        # Use RAG to retrieve context if enabled
+        business_context = ""
+        if use_rag:
+            try:
+                from RAG import retrieve_context, db
+                # Use provided query or extract keywords from posts
+                query = rag_query or " ".join([post.content[:50] for post in posts[:2]]) or "business services"
+                rag_context, _ = retrieve_context(db, query, top_k=3)
+                if rag_context and rag_context != "No relevant context found.":
+                    business_context = f"Business context: {rag_context[:300]}"
+            except Exception as e:
+                print(f"[DEBUG] Error using RAG for replies: {e}")
+                if notion_context:
+                    business_context = f"Business context: {notion_context[:300]}"
+        elif notion_context:
+            business_context = f"Business context: {notion_context[:300]}"
+        
         prompt = f"""You are managing social media for a business. Generate professional, engaging replies to these Mastodon posts.
 
-{f'Business context: {notion_context}' if notion_context else ''}
+{business_context if business_context else ''}
 
 Posts to reply to:
 {posts_context}

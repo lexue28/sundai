@@ -16,29 +16,65 @@ if not replicate_api_token:
     raise ValueError("REPLICATE_API_TOKEN not found in environment variables. Please add it to your .env file.")
 
 
+def start_notion_listener_background():
+    """Start the Notion listener in a background thread."""
+    try:
+        from notion_listener import NotionListener
+        
+        notion_page_url = os.getenv(
+            "NOTION_PAGE_URL",
+            "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"
+        )
+        poll_interval = int(os.getenv("NOTION_POLL_INTERVAL", "60"))  # 1 minute default
+        auto_post = os.getenv("NOTION_AUTO_POST", "false").lower() == "true"
+        
+        listener = NotionListener(notion_page_url, poll_interval)
+        thread = listener.start_listening_background(auto_post=auto_post)
+        
+        print("✅ Notion listener started in background")
+        return listener, thread
+    except Exception as e:
+        print(f"⚠️  Could not start Notion listener: {e}")
+        print("   Continuing without background monitoring...")
+        return None, None
+
+
 async def main():
     notion_page_url = "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"
     business_keyword = os.getenv('BUSINESS_KEYWORD', 'workshop')
     
-    notion_context = None
-    try:
-        notion_client = NotionClient()
-        notion_context = notion_client.get_page_as_text(notion_page_url)
-        print(f"\n{'='*60}")
-        print("NOTION PAGE CONTENT:")
-        print('='*60)
-        print(notion_context)
-        print('='*60 + "\n")
-    except Exception as e:
-        print(f"Error fetching from Notion: {e}")
+    # Start Notion listener in background (Part 4) - runs continuously
+    listener, listener_thread = start_notion_listener_background()
     
-    # Generate and post promotional post about fullstack abilities
+    if listener:
+        print("\n💡 Notion listener is running in the background.")
+        print("   It will check for changes every 1 minute (or as configured).")
+        print("   When changes are detected, it will print a notification and generate a post.")
+        print("   Keep this process running to monitor Notion changes!\n")
+    
+    # Initialize RAG database with Notion content (Part 1 & 2)
+    try:
+        from RAG import embed_notion_pages, db
+        print(f"\n{'='*60}")
+        print("INITIALIZING RAG DATABASE:")
+        print('='*60)
+        print("Embedding Notion page into SQLite database...")
+        chunks_saved = embed_notion_pages(db, [notion_page_url])
+        if chunks_saved > 0:
+            print(f"✅ Successfully embedded {chunks_saved} chunks into database")
+        else:
+            print("⚠️  No chunks saved - database may already be up to date")
+    except Exception as e:
+        print(f"⚠️  Error initializing RAG database: {e}")
+        print("   Continuing with existing database if available...")
+    
+    # Generate and post promotional post using RAG (Part 3)
     try:
         mastodon_client = MastodonClient()
         llm_client = LLMClient()
         
         print(f"\n{'='*60}")
-        print("GENERATING PROMOTIONAL POST:")
+        print("GENERATING PROMOTIONAL POST WITH RAG:")
         print('='*60)
         
         # Load past feedback to improve future posts
@@ -47,8 +83,9 @@ async def main():
         if past_feedback:
             print(f"📚 Loaded {len(past_feedback)} past feedback items to improve post generation")
         
+        # Generate post using RAG (automatically uses topic cycling)
         promotional_post = llm_client.generate_promotional_post(
-            notion_context=notion_context,
+            use_rag=True,  # Use RAG for context retrieval
             feedback_list=past_feedback,
             max_length=500
         )
@@ -142,6 +179,28 @@ freelance software engineer, computer science themed""",
         print(f"Error posting promotional content: {e}\n")
         import traceback
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
+    
+    # Keep the program running so the listener thread continues
+    if listener:
+        print(f"\n{'='*60}")
+        print("MAIN WORKFLOW COMPLETE - LISTENER STILL RUNNING")
+        print('='*60)
+        print("The Notion listener is still monitoring for changes in the background.")
+        print("Press Ctrl+C to stop both the listener and this program.")
+        print('='*60 + "\n")
+        
+        # Keep the main thread alive so the daemon listener thread can continue
+        try:
+            heartbeat_count = 0
+            while True:
+                await asyncio.sleep(60)  # Sleep for 1 minute at a time
+                heartbeat_count += 1
+                # Print a heartbeat every 5 minutes to show it's still running
+                if heartbeat_count % 5 == 0:  # Every 5 minutes (heartbeat, not check interval)
+                    from datetime import datetime
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 💓 Listener still running...")
+        except KeyboardInterrupt:
+            print("\n\n🛑 Shutting down...")
     
     # Generate and post replies to keyword searches
     # COMMENTED OUT - Replying functionality disabled

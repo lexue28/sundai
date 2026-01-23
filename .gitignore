@@ -214,3 +214,9 @@ __marimo__/
 
 # Feedback storage
 feedback.json
+
+# RAG and topic cycler state
+.topic_state.json
+.notion_listener_state.json
+tutorial_rag.db
+tutorial_rag.db-journal

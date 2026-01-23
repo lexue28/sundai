@@ -13,6 +13,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 import os
 import tempfile
+import sqlite3
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -30,11 +31,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database on startup
+# Global listener instance (will be set by startup)
+listener_instance = None
+
+# Initialize database and listener on startup
 @app.on_event("startup")
 async def startup_event():
     init_db()
     print("Database initialized")
+    
+    # Start Notion listener in background
+    try:
+        from notion_listener import NotionListener
+        notion_page_url = os.getenv(
+            "NOTION_PAGE_URL",
+            "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"
+        )
+        poll_interval = int(os.getenv("NOTION_POLL_INTERVAL", "60"))  # 1 minute
+        global listener_instance
+        listener_instance = NotionListener(notion_page_url, poll_interval)
+        listener_instance.start_listening_background(auto_post=False)
+        print("✅ Notion listener started in background")
+    except Exception as e:
+        print(f"⚠️  Could not start Notion listener: {e}")
 
 
 @app.get("/")
@@ -361,6 +380,193 @@ async def store_feedback(request: StoreFeedbackRequest):
         return {"message": "Feedback stored successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error storing feedback: {str(e)}")
+
+
+# Notion Listener API Endpoints
+
+@app.get("/api/listener/status")
+async def get_listener_status():
+    """
+    Get the status of the Notion listener.
+    
+    Returns information about:
+    - Whether listener is running
+    - Last check time
+    - Change count
+    - Poll interval
+    """
+    global listener_instance
+    if not listener_instance:
+        return {
+            "running": False,
+            "message": "Listener not initialized"
+        }
+    
+    return {
+        "running": True,
+        "notion_page_url": listener_instance.notion_page_url,
+        "poll_interval": listener_instance.poll_interval,
+        "change_count": listener_instance.change_count,
+        "last_change_time": listener_instance.last_change_time,
+        "last_content_hash": listener_instance.last_content_hash[:8] + "..." if listener_instance.last_content_hash else None
+    }
+
+
+@app.get("/api/listener/logs")
+async def get_listener_logs(limit: int = Query(50, ge=1, le=100)):
+    """
+    Get recent log entries from the Notion listener.
+    
+    - **limit**: Maximum number of log entries to return (1-100)
+    """
+    global listener_instance
+    if not listener_instance:
+        return {"logs": [], "message": "Listener not initialized"}
+    
+    logs = listener_instance.log_history[-limit:] if listener_instance.log_history else []
+    return {
+        "logs": logs,
+        "total_logs": len(listener_instance.log_history),
+        "returned": len(logs)
+    }
+
+
+@app.post("/api/listener/check-now")
+async def trigger_listener_check():
+    """
+    Manually trigger a check for Notion changes (doesn't wait for poll interval).
+    """
+    global listener_instance
+    if not listener_instance:
+        raise HTTPException(status_code=503, detail="Listener not initialized")
+    
+    try:
+        changed = listener_instance.check_for_changes()
+        if changed:
+            # Handle the update
+            post = listener_instance.handle_page_update()
+            return {
+                "changed": True,
+                "post_generated": post is not None,
+                "post": post if post else None
+            }
+        else:
+            return {
+                "changed": False,
+                "message": "No changes detected"
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error checking for changes: {str(e)}")
+
+
+# RAG Database API Endpoints
+
+@app.get("/api/rag/status")
+async def get_rag_status():
+    """
+    Get status of the RAG database.
+    
+    Returns information about:
+    - Database file location
+    - Number of chunks stored
+    - Database size
+    """
+    try:
+        from RAG import db, DATABASE_PATH
+        
+        db_path = str(DATABASE_PATH)
+        
+        # Count chunks
+        chunk_count = 0
+        try:
+            if hasattr(db, 'execute'):
+                result = db.execute("SELECT COUNT(*) FROM embeddings_meta").fetchone()
+                chunk_count = result[0] if result else 0
+            else:
+                # Try to connect directly
+                conn = sqlite3.connect(db_path)
+                result = conn.execute("SELECT COUNT(*) FROM embeddings_meta").fetchone()
+                chunk_count = result[0] if result else 0
+                conn.close()
+        except Exception as e:
+            # Table might not exist yet
+            chunk_count = 0
+        
+        # Get database size
+        db_size = 0
+        if os.path.exists(db_path):
+            db_size = os.path.getsize(db_path)
+        
+        return {
+            "database_path": db_path,
+            "chunk_count": chunk_count,
+            "database_size_bytes": db_size,
+            "database_size_mb": round(db_size / (1024 * 1024), 2) if db_size > 0 else 0,
+            "database_exists": os.path.exists(db_path)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting RAG status: {str(e)}")
+
+
+@app.get("/api/rag/search")
+async def search_rag(
+    query: str = Query(..., description="Search query"),
+    top_k: int = Query(5, ge=1, le=20, description="Number of results to return")
+):
+    """
+    Search the RAG database for relevant context.
+    
+    - **query**: Search query text
+    - **top_k**: Number of top results to return
+    """
+    try:
+        from RAG import retrieve_context, db
+        context, metadata = retrieve_context(db, query, top_k=top_k)
+        return {
+            "query": query,
+            "context": context,
+            "metadata": metadata,
+            "top_k": top_k
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error searching RAG: {str(e)}")
+
+
+# System/API Keys Status Endpoints
+
+@app.get("/api/system/status")
+async def get_system_status():
+    """
+    Get system status including API key configuration.
+    
+    Returns which API keys are configured (without exposing values).
+    """
+    api_keys_status = {
+        "notion_api_key": bool(os.getenv("NOTION_API_KEY")),
+        "mastodon_instance_url": bool(os.getenv("MASTODON_INSTANCE_URL")),
+        "mastodon_access_token": bool(os.getenv("MASTODON_ACCESS_TOKEN")),
+        "open_api_key": bool(os.getenv("OPEN_API_KEY") or os.getenv("OPENROUTER_API_KEY")),
+        "openrouter_model": os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-nano-30b-a3b:free"),
+        "replicate_api_token": bool(os.getenv("REPLICATE_API_TOKEN")),
+        "telegram_bot_token": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+        "telegram_chat_id": bool(os.getenv("TELEGRAM_CHAT_ID")),
+    }
+    
+    # Check database connection
+    db_status = "unknown"
+    try:
+        db = get_db()
+        db.execute(text("SELECT 1"))
+        db_status = "connected"
+    except:
+        db_status = "disconnected"
+    
+    return {
+        "api_keys_configured": api_keys_status,
+        "database_status": db_status,
+        "listener_running": listener_instance is not None,
+        "environment": os.getenv("ENVIRONMENT", "development")
+    }
 
 
 if __name__ == "__main__":
