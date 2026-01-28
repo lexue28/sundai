@@ -1,6 +1,6 @@
 # Sundai
 
-Social media automation built around Notion, Mastodon, and an LLM workflow.
+Social media automation built around Notion, Mastodon, and an LLM workflow. Built Jan. 2026 for MIT Sundai Club's How to Ship Almost Anything with AI v2.
 
 ## Setup
 
