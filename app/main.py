@@ -1,25 +1,30 @@
 import os
 import asyncio
+import sys
+from pathlib import Path
 import replicate
 from dotenv import load_dotenv
-from notion import NotionClient
-from mastadon import MastodonClient
-from llm_client import LLMClient
-from telegram_client import TelegramClient
-from feedback_storage import FeedbackStorage
+
+if __package__ is None or __package__ == "":
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+from app.clients.notion import NotionClient
+from app.clients.mastadon import MastodonClient
+from app.clients.llm_client import LLMClient
+from app.clients.telegram_client import TelegramClient
+from app.services.feedback_storage import FeedbackStorage
+from app.utils.paths import assets_path
 
 load_dotenv()
 
-# Verify Replicate API token is set
 replicate_api_token = os.getenv('REPLICATE_API_TOKEN')
-if not replicate_api_token:
-    raise ValueError("REPLICATE_API_TOKEN not found in environment variables. Please add it to your .env file.")
-
 
 def start_notion_listener_background():
     """Start the Notion listener in a background thread."""
     try:
-        from notion_listener import NotionListener
+        from app.services.notion_listener import NotionListener
         
         notion_page_url = os.getenv(
             "NOTION_PAGE_URL",
@@ -31,57 +36,42 @@ def start_notion_listener_background():
         listener = NotionListener(notion_page_url, poll_interval)
         thread = listener.start_listening_background(auto_post=auto_post)
         
-        print("✅ Notion listener started in background")
         return listener, thread
     except Exception as e:
-        print(f"⚠️  Could not start Notion listener: {e}")
-        print("   Continuing without background monitoring...")
+        print(f"Could not start Notion listener: {e}")
         return None, None
 
 
 async def main():
-    notion_page_url = "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"
-    business_keyword = os.getenv('BUSINESS_KEYWORD', 'workshop')
-    
-    # Start Notion listener in background (Part 4) - runs continuously
+    notion_page_url = "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"    
+    # Start Notion listener in background 
     listener, listener_thread = start_notion_listener_background()
     
     if listener:
-        print("\n💡 Notion listener is running in the background.")
-        print("   It will check for changes every 1 minute (or as configured).")
-        print("   When changes are detected, it will print a notification and generate a post.")
-        print("   Keep this process running to monitor Notion changes!\n")
+        print("Notion listener running in background.")
     
-    # Initialize RAG database with Notion content (Part 1 & 2)
+    # Initialize RAG database with Notion content 
     try:
-        from RAG import embed_notion_pages, db
-        print(f"\n{'='*60}")
-        print("INITIALIZING RAG DATABASE:")
-        print('='*60)
+        from app.services.rag import embed_notion_pages, db
         print("Embedding Notion page into SQLite database...")
         chunks_saved = embed_notion_pages(db, [notion_page_url])
         if chunks_saved > 0:
-            print(f"✅ Successfully embedded {chunks_saved} chunks into database")
+            print(f"Successfully embedded {chunks_saved} chunks into database")
         else:
-            print("⚠️  No chunks saved - database may already be up to date")
+            print("No chunks saved")
     except Exception as e:
-        print(f"⚠️  Error initializing RAG database: {e}")
-        print("   Continuing with existing database if available...")
+        print(f"Error initializing RAG database: {e}")
     
     # Generate and post promotional post using RAG (Part 3)
     try:
         mastodon_client = MastodonClient()
         llm_client = LLMClient()
         
-        print(f"\n{'='*60}")
-        print("GENERATING PROMOTIONAL POST WITH RAG:")
-        print('='*60)
-        
         # Load past feedback to improve future posts
         feedback_storage = FeedbackStorage()
         past_feedback = feedback_storage.get_all_feedback()
         if past_feedback:
-            print(f"📚 Loaded {len(past_feedback)} past feedback items to improve post generation")
+            print(f"Loaded {len(past_feedback)} past feedback items to improve post generation")
         
         # Generate post using RAG (automatically uses topic cycling)
         promotional_post = llm_client.generate_promotional_post(
@@ -95,13 +85,11 @@ async def main():
         print('='*60 + "\n")
         
         if not promotional_post or len(promotional_post.strip()) == 0:
-            print("[ERROR] Cannot post empty content! Skipping post.")
+            print("[ERROR] Cannot post empty content. Skipping post.")
             return
         
         # Send for human approval via Telegram
-        print(f"\n{'='*60}")
         print("SENDING FOR HUMAN APPROVAL:")
-        print('='*60)
         telegram_client = TelegramClient()
         
         decision, rejection_reason = await telegram_client.wait_for_approval_with_feedback(promotional_post)
@@ -112,7 +100,7 @@ async def main():
                 feedback_storage.store_feedback(promotional_post, rejection_reason)
             else:
                 feedback_storage.store_feedback(promotional_post, "No reason provided")
-            print("❌ Post rejected. Feedback stored.")
+            print("Post rejected. Feedback stored.")
             return
         
         if decision != "approve":
@@ -120,7 +108,7 @@ async def main():
             return
         
         # Post was approved, proceed with publishing
-        print("✅ Post approved. Proceeding with publishing...")
+        print("Post approved. Proceeding with publishing...")
         
         # Generate image with Replicate
         print("Generating image with Replicate...")
@@ -148,14 +136,15 @@ freelance software engineer, computer science themed""",
         print(f"Image generated: {output[0].url}")
         
         # Save image to disk
-        image_path = "my-image.webp"
+        image_path = assets_path("my-image.webp")
+        image_path.parent.mkdir(parents=True, exist_ok=True)
         with open(image_path, "wb") as file:
             file.write(output[0].read())
         print(f"Image saved to {image_path}")
         
         # Upload image to Mastodon
         print("Uploading image to Mastodon...")
-        media_id = mastodon_client.upload_media(image_path)
+        media_id = mastodon_client.upload_media(str(image_path))
         print(f"Image uploaded, media_id: {media_id}")
         
         print(f"[DEBUG] Attempting to post to Mastodon...")
@@ -168,7 +157,7 @@ freelance software engineer, computer science themed""",
                 visibility='public',
                 media_ids=[media_id]
             )
-            print(f"✓ Posted promotional post with image: {result.get('url')}\n")
+            print(f"Posted promotional post with image: {result.get('url')}\n")
         except Exception as post_error:
             print(f"[ERROR] Mastodon posting error: {type(post_error).__name__}: {post_error}")
             import traceback
@@ -182,28 +171,15 @@ freelance software engineer, computer science themed""",
     
     # Keep the program running so the listener thread continues
     if listener:
-        print(f"\n{'='*60}")
-        print("MAIN WORKFLOW COMPLETE - LISTENER STILL RUNNING")
-        print('='*60)
-        print("The Notion listener is still monitoring for changes in the background.")
-        print("Press Ctrl+C to stop both the listener and this program.")
-        print('='*60 + "\n")
-        
+        print("Notion listener is still monitoring for changes in the background.")
         # Keep the main thread alive so the daemon listener thread can continue
         try:
-            heartbeat_count = 0
             while True:
                 await asyncio.sleep(60)  # Sleep for 1 minute at a time
-                heartbeat_count += 1
-                # Print a heartbeat every 5 minutes to show it's still running
-                if heartbeat_count % 5 == 0:  # Every 5 minutes (heartbeat, not check interval)
-                    from datetime import datetime
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 💓 Listener still running...")
         except KeyboardInterrupt:
-            print("\n\n🛑 Shutting down...")
+            print("\n\n shutting down...")
     
     # Generate and post replies to keyword searches
-    # COMMENTED OUT - Replying functionality disabled
     # try:
     #     mastodon_client = MastodonClient()
     #     recent_posts = mastodon_client.get_recent_posts_by_keyword(business_keyword, limit=5)
@@ -219,17 +195,13 @@ freelance software engineer, computer science themed""",
     #         tone='professional',
     #         max_length=500
     #     )
-        
-    #     print(f"\n{'='*60}")
-    #     print("OPENROUTER GENERATED REPLIES:")
-    #     print('='*60)
+
     #     for i, reply in enumerate(reply_batch.replies, 1):
     #         print(f"\nReply {i}:")
     #         print(f"  Post ID to reply to: {reply.post_id}")
     #         print(f"  Reply text: {reply.status}")
     #         print(f"  Visibility: {reply.visibility}")
     #         print(f"  Length: {len(reply.status)} characters")
-    #     print('='*60 + "\n")
         
     #     for reply in reply_batch.replies:
     #         try:

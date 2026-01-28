@@ -84,7 +84,6 @@ class TelegramClient:
             text=f"📝 New Post for Approval\n\n{post_content}\n\nCharacters: {len(post_content)}",
             reply_markup=keyboard,
         )
-        print("📱 Sent to Telegram. Waiting for approval...")
         
         # Set up listeners
         self.app = Application.builder().token(self.bot_token).build()

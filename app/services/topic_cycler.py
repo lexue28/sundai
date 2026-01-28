@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 from typing import List
+from app.utils.paths import state_path
 
 # SF Tech Bro stereotypes
 SF_TECH_BRO_TOPICS = [
@@ -33,8 +34,9 @@ SF_TECH_BRO_TOPICS = [
 class TopicCycler:
     """Cycles through topics, persisting state to disk."""
     
-    def __init__(self, state_file: str = ".topic_state.json"):
-        self.state_file = Path(state_file)
+    def __init__(self, state_file: str = None):
+        self.state_file = Path(state_file) if state_file else state_path("topic_state.json")
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.topics = SF_TECH_BRO_TOPICS.copy()
         self.current_index = self._load_state()
     
@@ -48,7 +50,6 @@ class TopicCycler:
                     # Ensure index is valid
                     return index % len(self.topics)
             except Exception as e:
-                print(f"Error loading topic state: {e}")
                 return 0
         return 0
     
@@ -58,7 +59,7 @@ class TopicCycler:
             with open(self.state_file, 'w') as f:
                 json.dump({'current_index': self.current_index}, f)
         except Exception as e:
-            print(f"Error saving topic state: {e}")
+            pass
     
     def get_next_topic(self) -> str:
         """Get the next topic and advance the index."""

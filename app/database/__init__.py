@@ -2,9 +2,12 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from app.utils.paths import data_path
 
 # SQLite database file path
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sundai.db")
+_db_path = data_path("sundai.db")
+_db_path.parent.mkdir(parents=True, exist_ok=True)
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_db_path.as_posix()}")
 
 # Create SQLAlchemy engine
 engine = create_engine(

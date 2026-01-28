@@ -18,7 +18,8 @@ from typing import List, Dict, Optional
 from dotenv import load_dotenv
 import sqlite_vec
 from fastembed import TextEmbedding
-from notion import NotionClient
+from app.clients.notion import NotionClient
+from app.utils.paths import data_path
 
 # Suppress Hugging Face token warning
 os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
@@ -26,7 +27,8 @@ os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 load_dotenv()
 
 # Initialize SQLite database with FTS5 and sqlite-vec support
-DATABASE_PATH = Path("tutorial_rag.db")
+DATABASE_PATH = data_path("tutorial_rag.db")
+DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 def init_database(db_path: Path) -> sqlite3.Connection:
@@ -92,13 +94,9 @@ def init_database(db_path: Path) -> sqlite3.Connection:
 
 # Initialize the database
 db = init_database(DATABASE_PATH)
-print(f"Database initialized at: {DATABASE_PATH}")
-print("sqlite-vec extension loaded successfully!")
 
 # Initialize the embedding model (downloads on first use)
-print("Loading MiniLM-L6-v2 embedding model (ONNX)...")
 embedding_model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
-print("Model loaded successfully!")
 
 
 def generate_embedding(text: str) -> list[float]:
@@ -212,32 +210,24 @@ def embed_notion_page(conn, notion_page_url: str, source_type: str = "notion_pag
     Returns:
         Number of chunks saved
     """
-    print(f"\nProcessing Notion page: {notion_page_url}")
     
     try:
         # Fetch content from Notion
         notion_client = NotionClient()
-        print("  Fetching content from Notion API...")
         content = notion_client.get_page_as_text(notion_page_url)
         
         if not content or not content.strip():
-            print(f"  ⚠️  No content found in Notion page!")
             return 0
         
-        print(f"  Fetched {len(content)} characters from Notion")
         
         # Chunk the content
-        print("  Chunking document...")
         chunks = chunk_document(content, notion_page_url)
-        print(f"  Created {len(chunks)} chunks")
         
         # Batch generate embeddings
-        print("  Generating embeddings...")
         texts = [c["content"] for c in chunks]
         embeddings = generate_embeddings_batch(texts)
         
         # Save each chunk (to both embeddings_meta and vec_embeddings)
-        print("  Saving to database...")
         for chunk, embedding in zip(chunks, embeddings):
             save_embedding(
                 conn,
@@ -248,13 +238,10 @@ def embed_notion_page(conn, notion_page_url: str, source_type: str = "notion_pag
                 metadata=chunk["metadata"],
             )
         
-        print(f"  ✅ Saved {len(chunks)} chunk(s) to database")
         return len(chunks)
         
     except Exception as e:
-        print(f"  ❌ Error processing Notion page: {e}")
         import traceback
-        print(traceback.format_exc())
         return 0
 
 
@@ -270,18 +257,12 @@ def embed_notion_pages(conn, notion_page_urls: List[str], source_type: str = "no
     Returns:
         Total number of chunks saved
     """
-    print(f"\n{'='*60}")
-    print(f"EMBEDDING {len(notion_page_urls)} NOTION PAGE(S)")
-    print('='*60)
     
     total_chunks = 0
     for url in notion_page_urls:
         chunks = embed_notion_page(conn, url, source_type)
         total_chunks += chunks
     
-    print(f"\n{'='*60}")
-    print(f"Total embeddings created: {total_chunks}")
-    print('='*60)
     
     return total_chunks
 
@@ -515,34 +496,4 @@ def retrieve_context(conn, query: str, top_k: int = 10) -> tuple[str, list[dict]
     return formatted, results
 
 
-# Example usage when run as script
-if __name__ == "__main__":
-    # Default Notion page URL (can be set via environment variable)
-    default_notion_url = os.getenv(
-        "NOTION_PAGE_URL",
-        "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"
-    )
-    
-    # Embed the Notion page(s)
-    notion_urls = [default_notion_url]
-    total = embed_notion_pages(db, notion_urls)
-    
-    if total > 0:
-        # Test search
-        test_query = "freelance"
-        print(f"\n{'='*60}")
-        print(f"TESTING SEARCH: '{test_query}'")
-        print('='*60)
-        
-        context, results = retrieve_context(db, test_query, top_k=5)
-        
-        print(f"\nFound {len(results)} results:\n")
-        for i, r in enumerate(results, 1):
-            print(f"{i}. Score: {r['final_score']:.3f} (BM25: {r['bm25_score']:.3f}, Semantic: {r['semantic_score']:.3f})")
-            print(f"   Source: {r['source_id']}")
-            print(f"   Preview: {r['content'][:150]}...\n")
-        
-        print("\nFormatted context for LLM:")
-        print(context[:500] + "..." if len(context) > 500 else context)
-    else:
-        print("No documents were embedded. Please check your Notion API key and page URL.")
+ 

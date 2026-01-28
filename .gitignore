@@ -211,12 +211,14 @@ __marimo__/
 
 # docs
 *.md
+!README.md
 
 # Feedback storage
-feedback.json
+data/feedback.json
 
-# RAG and topic cycler state
-.topic_state.json
-.notion_listener_state.json
-tutorial_rag.db
-tutorial_rag.db-journal
+# RAG database and state
+data/tutorial_rag.db
+data/tutorial_rag.db-journal
+data/sundai.db
+data/sundai.db-journal
+state/*.json

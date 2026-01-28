@@ -2,7 +2,7 @@ import os
 import re
 import requests
 from dotenv import load_dotenv
-from models import MastodonPost, MastodonAccount
+from app.models.schemas import MastodonPost, MastodonAccount
 
 load_dotenv()
 
@@ -52,10 +52,7 @@ class MastodonClient:
         
         if in_reply_to_id:
             data['in_reply_to_id'] = str(in_reply_to_id)
-            print(f"Posting reply to post {in_reply_to_id}: {status[:100]}...")
-        else:
-            print(f"Posting new status: {status[:100]}...")
-        
+
         # Handle media_ids - Mastodon API expects media_ids[] as array
         # requests library handles lists in data by repeating the key
         files = None
@@ -68,7 +65,6 @@ class MastodonClient:
                 post_data.append((key, value))
             for media_id in media_ids_list:
                 post_data.append(('media_ids[]', media_id))
-            print(f"Attaching {len(media_ids)} media file(s)")
             response = requests.post(url, headers=self.headers, data=post_data, files=files)
         else:
             response = requests.post(url, headers=self.headers, data=data, files=files)
@@ -91,7 +87,6 @@ class MastodonClient:
             'limit': limit
         }
         
-        print(f"Searching Mastodon: {search_url} with params: {params}")
         response = requests.get(search_url, headers=self.headers, params=params)
         response.raise_for_status()
         

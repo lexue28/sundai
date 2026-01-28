@@ -1,14 +1,14 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from database import init_db, get_db
+from app.database import init_db, get_db
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from mastadon import MastodonClient
-from llm_client import LLMClient
-from notion import NotionClient
-from feedback_storage import FeedbackStorage
-from models import MastodonPost, PostFeedback, ReplyBatch
+from app.clients.mastadon import MastodonClient
+from app.clients.llm_client import LLMClient
+from app.clients.notion import NotionClient
+from app.services.feedback_storage import FeedbackStorage
+from app.models.schemas import MastodonPost, PostFeedback, ReplyBatch
 from typing import Optional, List
 from pydantic import BaseModel
 import os
@@ -38,11 +38,10 @@ listener_instance = None
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    print("Database initialized")
     
     # Start Notion listener in background
     try:
-        from notion_listener import NotionListener
+        from app.services.notion_listener import NotionListener
         notion_page_url = os.getenv(
             "NOTION_PAGE_URL",
             "https://www.notion.so/Sundai-Workshop-fd5a5674d6dc46fba81e9049b53ae410"
@@ -51,9 +50,8 @@ async def startup_event():
         global listener_instance
         listener_instance = NotionListener(notion_page_url, poll_interval)
         listener_instance.start_listening_background(auto_post=False)
-        print("✅ Notion listener started in background")
     except Exception as e:
-        print(f"⚠️  Could not start Notion listener: {e}")
+        pass
 
 
 @app.get("/")
@@ -472,7 +470,7 @@ async def get_rag_status():
     - Database size
     """
     try:
-        from RAG import db, DATABASE_PATH
+        from app.services.rag import db, DATABASE_PATH
         
         db_path = str(DATABASE_PATH)
         
@@ -520,7 +518,7 @@ async def search_rag(
     - **top_k**: Number of top results to return
     """
     try:
-        from RAG import retrieve_context, db
+        from app.services.rag import retrieve_context, db
         context, metadata = retrieve_context(db, query, top_k=top_k)
         return {
             "query": query,

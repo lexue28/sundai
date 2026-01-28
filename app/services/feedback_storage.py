@@ -2,14 +2,17 @@ import os
 import json
 from datetime import datetime
 from pathlib import Path
-from models import PostFeedback
+from typing import Optional, Union
+from app.models.schemas import PostFeedback
+from app.utils.paths import data_path
 
 
 class FeedbackStorage:
     """Simple JSON-based storage for post feedback."""
     
-    def __init__(self, storage_file: str = "feedback.json"):
-        self.storage_file = Path(storage_file)
+    def __init__(self, storage_file: Optional[Union[str, Path]] = None):
+        self.storage_file = Path(storage_file) if storage_file else data_path("feedback.json")
+        self.storage_file.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_storage_file()
     
     def _ensure_storage_file(self):
@@ -37,7 +40,6 @@ class FeedbackStorage:
         with open(self.storage_file, 'w') as f:
             json.dump(feedback_list, f, indent=2)
         
-        print(f"📝 Feedback stored: {rejection_reason}")
     
     def get_all_feedback(self) -> list[PostFeedback]:
         """Retrieve all stored feedback."""

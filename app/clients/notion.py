@@ -34,17 +34,14 @@ class NotionClient:
             if uuid_part:
                 # Format as UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
                 formatted = f"{uuid_part[:8]}-{uuid_part[8:12]}-{uuid_part[12:16]}-{uuid_part[16:20]}-{uuid_part[20:]}"
-                print(f"Extracted Notion page ID: {formatted} from URL: {original}")
                 return formatted
         
         # If already formatted or raw ID, ensure it has dashes
         page_id_clean = str(page_id).replace('-', '')
         if len(page_id_clean) == 32:
             formatted = f"{page_id_clean[:8]}-{page_id_clean[8:12]}-{page_id_clean[12:16]}-{page_id_clean[16:20]}-{page_id_clean[20:]}"
-            print(f"Formatted Notion page ID: {formatted}")
             return formatted
         
-        print(f"Using page ID as-is: {page_id}")
         return page_id
     
     def get_page_content(self, page_id):

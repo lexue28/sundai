@@ -7,13 +7,14 @@ import os
 import time
 import hashlib
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional
 from dotenv import load_dotenv
-from notion import NotionClient
-from RAG import embed_notion_page, db
-from llm_client import LLMClient
-from topic_cycler import get_topic_cycler
-from feedback_storage import FeedbackStorage
+from app.clients.notion import NotionClient
+from app.services.rag import embed_notion_page, db
+from app.clients.llm_client import LLMClient
+from app.services.topic_cycler import get_topic_cycler
+from app.services.feedback_storage import FeedbackStorage
+from app.utils.paths import state_path
 
 load_dotenv()
 
@@ -33,7 +34,8 @@ class NotionListener:
         self.poll_interval = poll_interval
         self.notion_client = NotionClient()
         self.last_content_hash = None
-        self.state_file = ".notion_listener_state.json"
+        self.state_file = state_path("notion_listener_state.json")
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.log_history = []  # Store recent log entries
         self.max_log_history = 100  # Keep last 100 log entries
         self.last_change_time = None
@@ -51,7 +53,7 @@ class NotionListener:
                     state = json.load(f)
                     self.last_content_hash = state.get('last_content_hash')
             except Exception as e:
-                print(f"Error loading listener state: {e}")
+                pass
     
     def _save_state(self):
         """Save the current content hash to disk."""
@@ -63,7 +65,7 @@ class NotionListener:
                     'last_check': datetime.now().isoformat()
                 }, f)
         except Exception as e:
-            print(f"Error saving listener state: {e}")
+            pass
     
     def _get_content_hash(self, content: str) -> str:
         """Generate a hash of the content to detect changes."""
@@ -91,7 +93,6 @@ class NotionListener:
         try:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             log_msg = f"[{timestamp}] 🔍 Checking Notion page for changes..."
-            print(f"\n{log_msg}")
             self._add_log(log_msg, "info")
             
             content = self.notion_client.get_page_as_text(self.notion_page_url)
@@ -99,8 +100,7 @@ class NotionListener:
             
             if self.last_content_hash is None:
                 # First run - just save the hash
-                log_msg = f"  📌 First check - saving baseline (hash: {current_hash[:8]}...)"
-                print(log_msg)
+                log_msg = f"First check - saving baseline (hash: {current_hash[:8]}...)"
                 self._add_log(log_msg, "info")
                 self.last_content_hash = current_hash
                 self._save_state()
@@ -109,25 +109,19 @@ class NotionListener:
             if current_hash != self.last_content_hash:
                 self.change_count += 1
                 self.last_change_time = datetime.now().isoformat()
-                log_msg = f"  ✅ CHANGE DETECTED! (hash changed: {self.last_content_hash[:8]}... → {current_hash[:8]}...)"
-                print(log_msg)
+                log_msg = f"(hash changed: {self.last_content_hash[:8]}... → {current_hash[:8]}...)"
                 self._add_log(log_msg, "change")
-                print(f"  🎉 This is change #{self.change_count} detected!")
                 self.last_content_hash = current_hash
                 self._save_state()
                 return True
             else:
-                log_msg = f"  ✓ No changes (hash: {current_hash[:8]}...)"
-                print(log_msg)
+                log_msg = f"No changes (hash: {current_hash[:8]}...)"
                 self._add_log(log_msg, "info")
                 return False
                 
         except Exception as e:
-            error_msg = f"  ❌ Error checking for changes: {e}"
-            print(error_msg)
+            error_msg = f"Error checking for changes: {e}"
             self._add_log(error_msg, "error")
-            import traceback
-            print(traceback.format_exc())
             return False
     
     def handle_page_update(self) -> Optional[str]:
@@ -137,18 +131,12 @@ class NotionListener:
         Returns:
             Generated post content, or None if failed
         """
-        print(f"\n{'='*60}")
-        print("HANDLING NOTION PAGE UPDATE")
-        print('='*60)
         
         try:
             # Re-embed the updated page
-            print("Re-embedding updated Notion page...")
             chunks_saved = embed_notion_page(db, self.notion_page_url)
-            print(f"Saved {chunks_saved} chunks to database")
             
             # Generate a new post
-            print("\nGenerating new post...")
             llm_client = LLMClient()
             feedback_storage = FeedbackStorage()
             past_feedback = feedback_storage.get_all_feedback()
@@ -166,16 +154,10 @@ class NotionListener:
                 max_length=500
             )
             
-            print(f"\n✅ Generated post ({len(post)} characters):")
-            print(post)
-            print('='*60)
             
             return post
             
         except Exception as e:
-            print(f"❌ Error handling page update: {e}")
-            import traceback
-            print(traceback.format_exc())
             return None
     
     def _listen_loop(self, auto_post: bool = False):
@@ -189,31 +171,14 @@ class NotionListener:
         try:
             while True:
                 if self.check_for_changes():
-                    print(f"\n🔔 NOTION PAGE UPDATED - Starting workflow...")
-                    post = self.handle_page_update()
-                    if post:
-                        print(f"\n✅ Post generated successfully!")
-                        if auto_post:
-                            # Auto-post logic would go here
-                            # For now, we'll just generate and return
-                            print("\n⚠️  Auto-post is enabled but not fully implemented.")
-                            print("   Post generated but not automatically posted.")
-                            print("   Use main.py for full posting workflow with approval.")
-                        else:
-                            print(f"\n📝 Generated post (not auto-posting):")
-                            print(f"   {post[:200]}...")
-                            print(f"\n💡 To post this, run: python main.py")
-                    else:
-                        print(f"\n❌ Failed to generate post from Notion update")
+                    self.handle_page_update()
                 
                 time.sleep(self.poll_interval)
                 
         except KeyboardInterrupt:
-            print("\n\n[Listener] Stopping...")
+            return
         except Exception as e:
-            print(f"\n[Listener] Error in listening loop: {e}")
-            import traceback
-            print(traceback.format_exc())
+            return
     
     def start_listening(self, auto_post: bool = False):
         """
@@ -223,14 +188,6 @@ class NotionListener:
             auto_post: If True, automatically create and post when changes detected
                       If False, just generate and return the post for manual approval
         """
-        print(f"\n{'='*60}")
-        print("STARTING NOTION LISTENER")
-        print('='*60)
-        print(f"Monitoring: {self.notion_page_url}")
-        print(f"Poll interval: {self.poll_interval} seconds ({self.poll_interval/60:.1f} minutes)")
-        print(f"Auto-post: {auto_post}")
-        print('='*60)
-        print("\nPress Ctrl+C to stop\n")
         
         self._listen_loop(auto_post)
     
@@ -246,16 +203,7 @@ class NotionListener:
             Thread object (can be used to stop it later)
         """
         import threading
-        
-        print(f"\n{'='*60}")
-        print("STARTING NOTION LISTENER (BACKGROUND)")
-        print('='*60)
-        print(f"Monitoring: {self.notion_page_url}")
-        print(f"Poll interval: {self.poll_interval} seconds ({self.poll_interval/60:.1f} minutes)")
-        print(f"Auto-post: {auto_post}")
-        print(f"Running in background thread...")
-        print('='*60)
-        
+
         thread = threading.Thread(
             target=self._listen_loop,
             args=(auto_post,),

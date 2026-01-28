@@ -2,7 +2,7 @@ import os
 import json
 from dotenv import load_dotenv
 from openai import OpenAI
-from models import ReplyBatch, Reply
+from app.models.schemas import ReplyBatch, Reply
 
 load_dotenv()
 
@@ -101,13 +101,7 @@ Output ONLY the post text."""
 Output ONLY the post text."""
         
         try:
-            print(f"[DEBUG] Calling OpenRouter API with model: {self.model}")
-            print(f"[DEBUG] Prompt length: {len(prompt)} characters")
-            
-            # For thinking models, we need more tokens (reasoning + output)
-            # Increase max_tokens to account for reasoning tokens
             max_output_tokens = 300
-            # Thinking models use reasoning tokens first, so increase total
             max_total_tokens = max_output_tokens + 400  # Extra for reasoning
             
             response = self.client.chat.completions.create(
@@ -119,17 +113,10 @@ Output ONLY the post text."""
                 max_tokens=max_total_tokens,  # Increased for thinking models
                 temperature=0.7
             )
-            
-            print(f"[DEBUG] Response received: {type(response)}")
-            print(f"[DEBUG] Response choices count: {len(response.choices) if response.choices else 0}")
-            
             if not response.choices or len(response.choices) == 0:
                 raise ValueError("No choices in API response")
             
             message = response.choices[0].message
-            print(f"[DEBUG] Message content type: {type(message.content)}")
-            print(f"[DEBUG] Message content (raw): {repr(message.content)}")
-            print(f"[DEBUG] Finish reason: {response.choices[0].finish_reason}")
             
             # Extract content - handle thinking models that put output in reasoning field
             post_content = None
@@ -137,7 +124,6 @@ Output ONLY the post text."""
             # Method 1: Standard content field (works for non-thinking models)
             if message.content and len(message.content.strip()) > 0:
                 post_content = str(message.content).strip()
-                print(f"[DEBUG] Got content from message.content: {len(post_content)} chars")
             
             # Method 2: For thinking models, extract from reasoning field
             # Thinking models put reasoning in reasoning field, and actual output might be there too
@@ -147,23 +133,19 @@ Output ONLY the post text."""
                 # Try to get reasoning from message object
                 if hasattr(message, 'reasoning') and message.reasoning:
                     reasoning_text = str(message.reasoning)
-                    print(f"[DEBUG] Found reasoning field on message object")
                 elif hasattr(message, 'model_dump'):
                     msg_dict = message.model_dump()
                     reasoning_text = msg_dict.get('reasoning', '')
                     if reasoning_text:
                         reasoning_text = str(reasoning_text)
-                        print(f"[DEBUG] Found reasoning in model_dump")
                 
                 if reasoning_text and len(reasoning_text) > 100:
-                    print(f"[DEBUG] Extracting post from reasoning text ({len(reasoning_text)} chars)...")
                     import re
                     
                     # Pattern 1: Look for text after "Draft:" in quotes
                     match = re.search(r'Draft:\s*\n\s*["\']([^"\']+)["\']', reasoning_text, re.DOTALL)
                     if match:
                         post_content = match.group(1).strip()
-                        print(f"[DEBUG] Extracted from 'Draft:' pattern: {len(post_content)} chars")
                     
                     # Pattern 2: Look for the actual post pattern (has hashtags)
                     if not post_content:
@@ -173,7 +155,6 @@ Output ONLY the post text."""
                             # Clean up if it has extra quotes
                             if post_content.startswith('"') and post_content.endswith('"'):
                                 post_content = post_content[1:-1]
-                            print(f"[DEBUG] Extracted from post pattern: {len(post_content)} chars")
                     
                     # Pattern 3: Find longest quoted string (likely the post)
                     if not post_content:
@@ -183,7 +164,6 @@ Output ONLY the post text."""
                             for match in sorted(quoted_matches, key=len, reverse=True):
                                 if '#' in match or len(match) > 150:
                                     post_content = match.strip()
-                                    print(f"[DEBUG] Extracted longest quoted text: {len(post_content)} chars")
                                     break
             
             # Method 3: Try accessing as dict (for Pydantic models) - check reasoning there too
@@ -204,18 +184,10 @@ Output ONLY the post text."""
                     elif hasattr(message, 'dict'):
                         msg_dict = message.dict()
                         post_content = msg_dict.get('content', '').strip() if msg_dict.get('content') else None
-                    if post_content:
-                        print(f"[DEBUG] Extracted from message dict: {len(post_content)} chars")
-                except Exception as e:
-                    print(f"[DEBUG] Dict extraction failed: {e}")
+                except Exception:
+                    pass
             
             if not post_content:
-                print(f"[ERROR] Could not extract content from response")
-                print(f"[DEBUG] Message has reasoning attr: {hasattr(message, 'reasoning')}")
-                if hasattr(message, 'reasoning'):
-                    reasoning_preview = str(message.reasoning)[:1000] if message.reasoning else "None"
-                    print(f"[DEBUG] Reasoning preview: {reasoning_preview}...")
-                print(f"[DEBUG] Response string (first 2000 chars): {str(response)[:2000]}...")
                 raise ValueError("API returned empty content - could not extract from content or reasoning fields")
             
             # Remove any markdown formatting if present
@@ -224,13 +196,9 @@ Output ONLY the post text."""
             if post_content.startswith("'") and post_content.endswith("'"):
                 post_content = post_content[1:-1]
             
-            print(f"[DEBUG] Post content after processing: {len(post_content)} chars")
             return post_content
             
         except Exception as e:
-            print(f"[ERROR] Exception in generate_post_with_rag: {type(e).__name__}: {e}")
-            import traceback
-            print(traceback.format_exc())
             raise RuntimeError(f"Failed to generate post: {e}") from e
     
     def generate_promotional_post(self, notion_context=None, feedback_list=None, max_length=500, use_rag=True, rag_query=None, topic=None):
@@ -246,46 +214,33 @@ Output ONLY the post text."""
             rag_query: Query string for RAG retrieval (default: based on topic)
             topic: Specific topic to use (default: cycles through SF tech bro topics)
         """
-        print(f"\n[DEBUG] Starting promotional post generation with RAG...")
-        print(f"[DEBUG] Model: {self.model}")
-        print(f"[DEBUG] Using RAG: {use_rag}")
-        print(f"[DEBUG] Feedback items: {len(feedback_list) if feedback_list else 0}")
         
         # Get topic (cycle through SF tech bro topics if not provided)
         if not topic:
-            from topic_cycler import get_topic_cycler
+            from app.services.topic_cycler import get_topic_cycler
             topic_cycler = get_topic_cycler()
             topic = topic_cycler.get_next_topic()
-            print(f"[DEBUG] Using topic from cycler: '{topic}'")
-        else:
-            print(f"[DEBUG] Using provided topic: '{topic}'")
-        
         # Get context from RAG (about Linda's projects/skills)
         context = ""
         if use_rag:
             try:
-                from RAG import retrieve_context, db
+                from app.services.rag import retrieve_context, db
                 # Query for coding/projects context (not the SF tech bro topic)
                 query = rag_query or "freelance developer coding projects skills React Node.js Python"
-                print(f"[DEBUG] Retrieving context from RAG with query: '{query}'")
                 rag_context, _ = retrieve_context(db, query, top_k=5)
                 if rag_context and rag_context != "No relevant context found.":
                     context = rag_context
-                    print(f"[DEBUG] Retrieved {len(rag_context)} characters from RAG")
                 else:
-                    print(f"[DEBUG] No context found in RAG")
                     # Fallback to notion_context if provided
                     if notion_context:
                         context = notion_context[:500]
             except Exception as e:
-                print(f"[DEBUG] Error using RAG: {e}")
                 if notion_context:
                     context = notion_context[:500]
         elif notion_context:
             context = notion_context[:500]
         
         if not context:
-            print("[WARNING] No context available for post generation")
             context = "Freelance fullstack developer with experience in React, Node.js, Python, databases, and APIs. Available for freelance work."
         
         # Get feedback to include in prompt
@@ -293,7 +248,6 @@ Output ONLY the post text."""
         if feedback_list and len(feedback_list) > 0:
             latest_reason = feedback_list[-1].rejection_reason.strip()
             feedback = latest_reason
-            print(f"[DEBUG] Including feedback in prompt: {latest_reason}")
         
         # Generate post using RAG (with feedback in prompt)
         post_content = self.generate_post_with_rag(
@@ -303,8 +257,6 @@ Output ONLY the post text."""
             feedback=feedback
         )
         
-        print(f"[DEBUG] Final post content length: {len(post_content)}")
-        print(f"[DEBUG] Final post content: {post_content[:100]}...")
         return post_content
     
     def generate_replies(self, posts, notion_context=None, tone='professional', max_length=500, use_rag=True, rag_query=None):
@@ -333,14 +285,13 @@ Output ONLY the post text."""
         business_context = ""
         if use_rag:
             try:
-                from RAG import retrieve_context, db
+                from app.services.rag import retrieve_context, db
                 # Use provided query or extract keywords from posts
                 query = rag_query or " ".join([post.content[:50] for post in posts[:2]]) or "business services"
                 rag_context, _ = retrieve_context(db, query, top_k=3)
                 if rag_context and rag_context != "No relevant context found.":
                     business_context = f"Business context: {rag_context[:300]}"
             except Exception as e:
-                print(f"[DEBUG] Error using RAG for replies: {e}")
                 if notion_context:
                     business_context = f"Business context: {notion_context[:300]}"
         elif notion_context:
