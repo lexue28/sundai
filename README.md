@@ -37,5 +37,43 @@ python app/main.py
 
 This starts the workflow and the Notion listener (if enabled in your `.env`).
 
-The FastAPI backend is currently running on a GCP VM and exposes auto-generated API documentation at:
-http://104.196.214.118:8000/docs
+## Run the local website (backend + frontend)
+
+1) Start the FastAPI backend (repo root):
+
+```bash
+python -m uvicorn app.api.server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+If you see `No module named uvicorn`, install dependencies first:
+
+```bash
+pip install -r requirements.txt
+```
+
+(`unicorn` is a typo; the module name is `uvicorn`.)
+
+API docs will be available at:
+`http://localhost:8000/docs`
+
+2) In a second terminal, start the frontend:
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Frontend URL:
+`http://localhost:5173`
+
+The frontend connects to:
+`ws://localhost:8000/ws/chat`
+
+## Optional: run backend with Gunicorn
+
+For Linux/macOS production-style serving (instead of `uvicorn --reload`):
+
+```bash
+gunicorn app.api.server:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+```

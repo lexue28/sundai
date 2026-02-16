@@ -2,6 +2,7 @@ import os
 import json
 from dotenv import load_dotenv
 from openai import OpenAI
+from typing import Optional
 from app.models.schemas import ReplyBatch, Reply
 
 load_dotenv()
@@ -50,7 +51,7 @@ Generate the social media post:"""
         
         return response.choices[0].message.content.strip()
     
-    def generate_post_with_rag(self, topic: str, context: str, max_length: int = 500, feedback: str = None) -> str:
+    def generate_post_with_rag(self, topic: str, context: str, max_length: int = 500, feedback: str = None, user_request: Optional[str] = None) -> str:
         """
         Generate a post using RAG context and a specific topic.
         Base prompt is about Linda the freelance coder, with SF tech bro topic as an angle.
@@ -65,6 +66,7 @@ Generate the social media post:"""
             Generated post text
         """
         # Base prompt about Linda the freelance coder
+        user_requirement = f"- User request (must be satisfied): {user_request}\n" if user_request else ""
         base_prompt = f"""Write a Mastodon post for Linda, a freelance fullstack developer.
 
 About Linda:
@@ -80,12 +82,8 @@ SF Tech Bro Topic Angle: {topic}
 (Incorporate this topic as a theme/angle, but keep the focus on Linda's coding work and projects)
 
 Requirements:
-- Primary focus: Linda's coding skills, projects, or freelance availability
-- Incorporate the SF tech bro topic ({topic}) as a subtle angle or theme
-- Engaging and authentic
-- Under {max_length} characters
-- Include relevant hashtags like #FreelanceDeveloper #FullStackDeveloper #HireMe
-- Professional but personal tone"""
+{user_requirement}- Incorporate the SF tech bro topic ({topic}) as a subtle angle or theme
+- Under {max_length} characters"""
         
         # Add feedback if provided
         if feedback:
@@ -257,6 +255,58 @@ Output ONLY the post text."""
             feedback=feedback
         )
         
+        return post_content
+
+    def generate_promotional_post_with_user_request(self, user_request: str, max_length=500, use_rag=True, rag_query=None, topic=None, feedback_list=None, notion_context=None):
+        """
+        Generate a promotional post using RAG, topic cycling, and a user request.
+
+        Args:
+            user_request: The user's requested prompt content to prepend in requirements
+            max_length: Maximum character length for the post
+            use_rag: If True, use RAG to retrieve context from database (default: True)
+            rag_query: Query string for RAG retrieval (default: based on topic)
+            topic: Specific topic to use (default: cycles through SF tech bro topics)
+            feedback_list: Optional list of PostFeedback objects with past rejection reasons
+            notion_context: Optional context from Notion page (if not using RAG)
+        """
+        if not topic:
+            from app.services.topic_cycler import get_topic_cycler
+            topic_cycler = get_topic_cycler()
+            topic = topic_cycler.get_next_topic()
+
+        context = ""
+        if use_rag:
+            try:
+                from app.services.rag import retrieve_context, db
+                query = rag_query or "freelance developer coding projects skills React Node.js Python"
+                rag_context, _ = retrieve_context(db, query, top_k=5)
+                if rag_context and rag_context != "No relevant context found.":
+                    context = rag_context
+                elif notion_context:
+                    context = notion_context[:500]
+            except Exception:
+                if notion_context:
+                    context = notion_context[:500]
+        elif notion_context:
+            context = notion_context[:500]
+
+        if not context:
+            context = "Freelance fullstack developer with experience in React, Node.js, Python, databases, and APIs. Available for freelance work."
+
+        feedback = None
+        if feedback_list and len(feedback_list) > 0:
+            latest_reason = feedback_list[-1].rejection_reason.strip()
+            feedback = latest_reason
+
+        post_content = self.generate_post_with_rag(
+            topic=topic,
+            context=context,
+            max_length=max_length,
+            feedback=feedback,
+            user_request=user_request,
+        )
+
         return post_content
     
     def generate_replies(self, posts, notion_context=None, tone='professional', max_length=500, use_rag=True, rag_query=None):

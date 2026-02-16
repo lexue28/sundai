@@ -1,0 +1,187 @@
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #0b0f14;
+}
+
+/* Chat area takes remaining space and enables scroll */
+.app-root > *:last-child {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hero {
+  text-align: center;
+  padding: 24px;
+  color: white;
+}
+
+.wave-text {
+  display: inline-block;
+  font-size: 48px;
+  font-weight: bold;
+}
+
+.wave-text span {
+  display: inline-block;
+  animation: wave 1.6s ease-in-out infinite;
+}
+
+@keyframes wave {
+  0% { transform: translateY(0); }
+  25% { transform: translateY(-10px); }
+  50% { transform: translateY(0); }
+  75% { transform: translateY(10px); }
+  100% { transform: translateY(0); }
+}
+
+.rsc-container {
+  flex: 1;
+  width: 100%;
+  border-radius: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: transparent !important;
+  transform: none !important; /* Allow position:fixed footer to use viewport, not this container */
+}
+
+/* Scrollable chat area - lower z-index so text goes under the textbox */
+.rsc-chat-window,
+.rsc-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: scroll !important;
+  overflow-x: hidden;
+  padding: 0;
+  background: transparent !important;
+  z-index: 1;
+  position: relative;
+  height: 100% !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.rsc-content {
+  background: transparent !important;
+}
+
+/* Ensure flex chain allows scroll - parent must constrain height */
+.rsc,
+.rsc-container {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.rsc {
+  flex: 1;
+  min-height: 0;
+}
+
+.rsc-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0b0f14 !important;
+}
+
+.rsc-cs,
+.rsc-os {
+  background: transparent !important;
+}
+
+.rsc-bot-text,
+.rsc-user-text,
+.rsc-os-option-element {
+  background: #111827 !important;
+  color: #e6edf3 !important;
+  box-shadow: none !important;
+  border: 1px solid #1f2937 !important;
+}
+
+.rsc-bot-text,
+.rsc-user-text {
+  max-width: 70%;
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Fix truncated chat messages - override react-simple-chatbot bubble styles */
+.rsc-ts-bubble {
+  overflow: visible !important;
+  max-width: 85% !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  text-overflow: unset !important;
+}
+
+/* Fixed textbox - higher z-index overlays the scrollable content */
+.rsc-footer {
+  position: fixed !important;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  padding: 12px;
+  z-index: 30;
+  background: #0b0f14 !important;
+  border-top: 1px solid #1f2937;
+}
+
+.rsc-input {
+  position: relative !important;
+  left: 0;
+  bottom: auto;
+  height: auto;
+  min-height: 150px;
+  transform: none;
+  width: 100%;
+  background: transparent !important;
+  padding: 0 12px !important;
+  z-index: 30;
+  display: flex;
+  align-items: stretch;
+}
+
+.rsc-input input,
+.rsc-input textarea {
+  width: 100% !important;
+  min-height: 150px !important;
+  background: #111827 !important;
+  color: #e6edf3 !important;
+  border: 1px solid #1f2937 !important;
+  border-radius: 12px !important;
+  padding: 12px 42px 12px 14px !important;
+  resize: none;
+}
+
+.rsc-input input::placeholder {
+  color: #94a3b8 !important;
+}
+
+.rsc-input button,
+.rsc-input svg {
+  fill: #94a3b8 !important;
+  color: #94a3b8 !important;
+}
+
+.rsc-submit-button {
+  top: auto !important;
+  bottom: 12px !important;
+}
+

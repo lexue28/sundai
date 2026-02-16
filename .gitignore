@@ -222,3 +222,5 @@ data/tutorial_rag.db-journal
 data/sundai.db
 data/sundai.db-journal
 state/*.json
+
+client/node_modules/

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, Body, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Query, Body, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import init_db, get_db
@@ -7,11 +7,15 @@ from sqlalchemy import text
 from app.clients.mastadon import MastodonClient
 from app.clients.llm_client import LLMClient
 from app.clients.notion import NotionClient
+from app.clients.telegram_client import TelegramClient
 from app.services.feedback_storage import FeedbackStorage
+from app.utils.paths import assets_path
 from app.models.schemas import MastodonPost, PostFeedback, ReplyBatch
 from typing import Optional, List
 from pydantic import BaseModel
 import os
+import re
+import replicate
 import tempfile
 import sqlite3
 
@@ -33,6 +37,14 @@ app.add_middleware(
 
 # Global listener instance (will be set by startup)
 listener_instance = None
+
+HELP_PATTERN = re.compile(r"\b(help|info|information|work|working|works)\b", re.IGNORECASE)
+HELP_MESSAGE = (
+    "This is an automated pipeline that posts onto Mastodon for Linda. "
+    "It uses Notion, Mastodon, and Telegram, and posts must be improved by Linda via Telegram before publishing. "
+    "Linda can approve or reject and leave feedback. "
+    "We use RAG plus past feedback plus your prompt to generate the post."
+)
 
 # Initialize database and listener on startup
 @app.on_event("startup")
@@ -565,6 +577,136 @@ async def get_system_status():
         "listener_running": listener_instance is not None,
         "environment": os.getenv("ENVIRONMENT", "development")
     }
+
+
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket):
+    """Chatbot websocket endpoint."""
+    await websocket.accept()
+    llm_client = LLMClient()
+    pending_post = None
+    pending_request = None
+
+    while True:
+        try:
+            user_message = await websocket.receive_text()
+        except WebSocketDisconnect:
+            break
+
+        if pending_post:
+            normalized = (user_message or "").strip().lower()
+            if normalized in {"yes", "y", "ok", "okay", "sure", "submit", "approve"}:
+                await websocket.send_text("Submitting to Telegram for approval...")
+                try:
+                    feedback_storage = FeedbackStorage()
+                    telegram_client = TelegramClient()
+                    decision, rejection_reason = await telegram_client.wait_for_approval_with_feedback(
+                        pending_post,
+                        user_request=pending_request,
+                    )
+
+                    if decision == "reject":
+                        feedback_storage.store_feedback(
+                            pending_post,
+                            rejection_reason or "No reason provided",
+                        )
+                        await websocket.send_text("Rejected by Linda. Stored as feedback.")
+                    elif decision == "approve":
+                        await websocket.send_text("Approved by Linda. Generating image and posting to Mastodon...")
+
+                        output = replicate.run(
+                            "sundai-club/linda_model:4e616b5b9ce6bb30d1be9fa2539ed6d98777ce306e42bfacffb561d199a88ec5",
+                            input={
+                                "prompt": (
+                                    "portrait photo of a young asian woman, female, 20s,\n"
+                                    "SUNDAI, the same woman from the training dataset,\n"
+                                    "freelance software engineer, computer science themed"
+                                ),
+                                "model": "dev",
+                                "go_fast": False,
+                                "lora_scale": 0.5,
+                                "megapixels": "1",
+                                "num_outputs": 1,
+                                "aspect_ratio": "1:1",
+                                "output_format": "webp",
+                                "guidance_scale": 10,
+                                "output_quality": 80,
+                                "prompt_strength": 0.8,
+                                "extra_lora_scale": 1,
+                                "num_inference_steps": 28,
+                            },
+                        )
+
+                        image_path = assets_path("my-image.webp")
+                        image_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(image_path, "wb") as file:
+                            file.write(output[0].read())
+
+                        mastodon_client = MastodonClient()
+                        media_id = mastodon_client.upload_media(str(image_path))
+                        result = mastodon_client.post_status(
+                            status=pending_post,
+                            visibility="public",
+                            media_ids=[media_id],
+                        )
+
+                        post_url = result.get("url") if isinstance(result, dict) else None
+                        if post_url:
+                            await websocket.send_text(f"Posted to Mastodon: {post_url}")
+                        else:
+                            await websocket.send_text("Posted to Mastodon.")
+                    else:
+                        await websocket.send_text("Unexpected decision. No post was published.")
+                except Exception as exc:
+                    print(f"[ws] publish error: {exc}")
+                    await websocket.send_text(
+                        "Error submitting to Telegram or posting. Check server logs."
+                    )
+                finally:
+                    pending_post = None
+                    pending_request = None
+            elif normalized in {"end", "quit", "stop", "exit"}:
+                pending_post = None
+                pending_request = None
+                await websocket.send_text("Ended. If you want a new draft later, just ask.")
+            elif normalized in {"no", "n"}:
+                try:
+                    post = llm_client.generate_promotional_post_with_user_request(
+                        user_request=pending_request or user_message,
+                        max_length=500,
+                        use_rag=True,
+                    )
+                    pending_post = post
+                    await websocket.send_text(f"{post}\n\nSubmit to Telegram? (yes/no/end)")
+                except Exception as exc:
+                    print(f"[ws] LLM error: {exc}")
+                    pending_post = None
+                    pending_request = None
+                    await websocket.send_text(
+                        "Sorry, I could not generate a post right now. Check API keys and server logs."
+                    )
+            else:
+                await websocket.send_text("Please respond with yes, no, or end.")
+            continue
+
+        if HELP_PATTERN.search(user_message or ""):
+            await websocket.send_text(HELP_MESSAGE)
+            continue
+
+        try:
+            post = llm_client.generate_promotional_post_with_user_request(
+                user_request=user_message,
+                max_length=500,
+                use_rag=True,
+            )
+            pending_post = post
+            pending_request = user_message
+            await websocket.send_text(f"{post}\n\nSubmit to Telegram? (yes/no/end)")
+        except Exception as exc:
+            print(f"[ws] LLM error: {exc}")
+            await websocket.send_text(
+                "Sorry, I could not generate a post right now. Check API keys and server logs."
+            )
 
 
 if __name__ == "__main__":
